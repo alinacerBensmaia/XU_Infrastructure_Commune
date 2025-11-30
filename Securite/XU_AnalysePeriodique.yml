@@ -1,0 +1,89 @@
+# azure-pipelines.yml
+trigger:
+  - main
+
+
+resources:
+  repositories:
+    - repository: ST3.Outils.DevOps
+      type: git
+      name: ST3.Outils.DevOps
+      ref: testGHAS
+
+extends:
+  template: Build/Extends/ST3.Extends.IC.yml@ST3.Outils.DevOps
+  parameters:      
+    solutionPath: '**/*.sln'
+    manifest: "FC_Fichier_Inscription_Clientele.Manifest.json"
+    preBuild:
+      - task: PowerShell@2
+        displayName: 'Installer CodeQL (si non déjà présent)'
+        inputs:
+          targetType: 'inline'
+          script: |
+            # Déterminer le dossier du tool cache de l’agent
+            $Tools = "$env:AGENT_WORKFOLDER\_tool"
+            if (-not (Test-Path $Tools)) {
+              $Tools = "$env:AGENT_HOMEDIRECTORY\_work\_tool"
+            }
+
+            $Ver   = "0.0.0-codeql-bundle-v2.23.3"
+            $Base  = Join-Path $Tools "CodeQL\$Ver"
+            $X64   = Join-Path $Base "x64"
+            $Dst   = Join-Path $X64 "codeql"
+            $Src   = "C:\Temp\CodeQL\codeql-bundle-win64"
+            $Marker = Join-Path $Base "x64.complete"
+
+            Write-Host "Vérification de l'installation CodeQL..."
+            if ((Test-Path $Marker) -and (Test-Path (Join-Path $Dst "codeql.exe"))) {
+                Write-Host "✅ CodeQL déjà installé : $Dst"
+                exit 0
+            }
+
+            Write-Host "⚙️ Installation de CodeQL depuis $Src vers $Dst..."
+
+            if (-not (Test-Path "$Src\codeql\codeql.exe")) {
+              Write-Error "Le binaire codeql.exe est introuvable sous $Src\codeql — vérifie ton extraction."
+              exit 1
+            }
+
+            # Créer l’arborescence cible
+            New-Item -ItemType Directory -Force -Path $Dst | Out-Null
+
+            # Copier les fichiers du bundle
+            Copy-Item -Path "$Src\*" -Destination "$X64" -Recurse -Force
+
+            # Créer le marqueur
+            New-Item -ItemType File -Force -Path $Marker | Out-Null
+
+            if (Test-Path (Join-Path $Dst "codeql.exe")) {
+              Write-Host "✅ CodeQL installé avec succès dans $Dst"
+            } else {
+              Write-Error "❌ Échec : codeql.exe introuvable après copie"
+              exit 1
+            }
+    # 1) Code scanning (CodeQL)
+      - task: AdvancedSecurity-Codeql-Init@1
+        inputs:
+#          enableAutomaticCodeQLInstall: true
+          languages: 'csharp'
+          querysuite: 'code-scanning'
+#          codeqltoolsdirectory: 'D:\azagent\A2\_work\_tool\'
+#          workingDirectory: '$(Build.SourcesDirectory)'           
+#          sourcesfolder: '$(Build.SourcesDirectory)'
+    postBuild:
+    # 1) Code scanning (CodeQL)
+      - task: AdvancedSecurity-Codeql-Analyze@1
+        inputs:
+          WaitForProcessing: false
+    # 2) Dependency scanning (SCA)
+      - task: AdvancedSecurity-Dependency-Scanning@1
+        displayName: 'GHAS Dependency scanning'
+        inputs: 
+          directoryExclusionList: ''
+          #workingDirectory: '$(Build.SourcesDirectory)' 
+    # Publication des résultats
+      - task: AdvancedSecurity-Publish@1
+        inputs:
+          WaitForProcessing: false
+
