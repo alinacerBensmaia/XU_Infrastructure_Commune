@@ -1,0 +1,54 @@
+# Exemple d'utilisation du template de validation périodique de sécurité
+# Ce fichier montre comment un repository peut utiliser le nouveau système de scan
+# 
+# À placer dans le repository à scanner (ex: XU_Infrastructure_Commune)
+# Fichier: azure-pipelines-security-scan.yml ou similaire
+#
+# Contact: Martin Desmeules, Fabiano Liberati
+# Date: 2025-11-30
+
+trigger:
+  # Déclenchement sur la branche principale
+  - main
+  # Optionnel: Ajouter d'autres branches
+  # - develop
+  # - release/*
+
+# Déclenchement périodique (schedule)
+schedules:
+  - cron: "0 2 * * 0"  # Tous les dimanches à 2h du matin
+    displayName: 'Scan de sécurité hebdomadaire'
+    branches:
+      include:
+        - main
+    always: true  # Exécuter même si aucun changement
+
+# Référence au repository contenant les templates
+resources:
+  repositories:
+    - repository: ST3.Outils.DevOps
+      type: git
+      name: ST3.Outils.DevOps
+      ref: main  # ou la branche appropriée (ex: testGHAS)
+
+# Extension du template de scan périodique
+extends:
+  template: Securite/ST3.Securite.Extends.ScanPeriodique.yml@ST3.Outils.DevOps
+  parameters:
+    # Chemin vers les solutions à compiler et scanner
+    solutionPath: '**/*.sln'
+    
+    # Configuration de build
+    buildConfiguration: 'Release'
+    buildPlatform: 'Any CPU'
+    
+    # Activer/désactiver les scans
+    enableGHAS: true      # GitHub Advanced Security (CodeQL + Dependency Scanning)
+    enableDevSkim: true   # DevSkim security patterns
+    
+    # Langages pour CodeQL (adapter selon le projet)
+    codeQLLanguages: 'csharp'  # Peut être: 'csharp', 'javascript', 'python', etc.
+    
+    # Répertoires à exclure du scan de dépendances
+    # Exemple: 'node_modules,bin,obj,packages'
+    directoryExclusionList: 'bin,obj,packages'

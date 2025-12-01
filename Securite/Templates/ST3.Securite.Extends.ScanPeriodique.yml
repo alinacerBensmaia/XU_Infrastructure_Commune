@@ -1,0 +1,145 @@
+# Template Extends pour la validation périodique de sécurité
+# Ce template orchestre la compilation et les scans de sécurité (GHAS + DevSkim)
+# 
+# Contact: Martin Desmeules, Fabiano Liberati
+# Date: 2025-11-30
+
+parameters:
+  # Chemin vers les solutions à compiler
+  - name: solutionPath
+    type: string
+    default: '**/*.sln'
+  
+  # Configuration de build
+  - name: buildConfiguration
+    type: string
+    default: 'Release'
+  
+  - name: buildPlatform
+    type: string
+    default: 'Any CPU'
+  
+  # Options pour les scans
+  - name: enableGHAS
+    type: boolean
+    default: true
+  
+  - name: enableDevSkim
+    type: boolean
+    default: true
+  
+  # Exclusions pour le scan de dépendances
+  - name: directoryExclusionList
+    type: string
+    default: ''
+
+  # Langages pour CodeQL
+  - name: codeQLLanguages
+    type: string
+    default: 'csharp'
+
+stages:
+  - stage: SecurityValidation
+    displayName: 'Validation Périodique de Sécurité'
+    jobs:
+      - job: BuildAndScan
+        displayName: 'Compilation et Scans de Sécurité'
+        pool:
+          vmImage: 'windows-latest'
+        
+        steps:
+          # ========================================
+          # ÉTAPE 1: Restauration NuGet
+          # ========================================
+          - task: NuGetToolInstaller@1
+            displayName: 'Installer NuGet'
+            inputs:
+              versionSpec: '>=5.0.0'
+
+          - task: NuGetCommand@2
+            displayName: 'Restaurer les packages NuGet'
+            inputs:
+              command: 'restore'
+              restoreSolution: '${{ parameters.solutionPath }}'
+
+          # ========================================
+          # ÉTAPE 2: Installation et Init CodeQL (PreBuild)
+          # ========================================
+          - ${{ if eq(parameters.enableGHAS, true) }}:
+            - task: PowerShell@2
+              displayName: 'Installer CodeQL (si non déjà présent)'
+              inputs:
+                targetType: 'inline'
+                script: |
+                  # Déterminer le dossier du tool cache de l'agent
+                  $Tools = "$env:AGENT_WORKFOLDER\_tool"
+                  if (-not (Test-Path $Tools)) {
+                    $Tools = "$env:AGENT_HOMEDIRECTORY\_work\_tool"
+                  }
+
+                  $Ver   = "0.0.0-codeql-bundle-v2.23.3"
+                  $Base  = Join-Path $Tools "CodeQL\$Ver"
+                  $X64   = Join-Path $Base "x64"
+                  $Dst   = Join-Path $X64 "codeql"
+                  $Src   = "C:\Temp\CodeQL\codeql-bundle-win64"
+                  $Marker = Join-Path $Base "x64.complete"
+
+                  Write-Host "Vérification de l'installation CodeQL..."
+                  if ((Test-Path $Marker) -and (Test-Path (Join-Path $Dst "codeql.exe"))) {
+                      Write-Host "✅ CodeQL déjà installé : $Dst"
+                      exit 0
+                  }
+
+                  Write-Host "⚙️ Installation de CodeQL depuis $Src vers $Dst..."
+
+                  if (-not (Test-Path "$Src\codeql\codeql.exe")) {
+                    Write-Error "Le binaire codeql.exe est introuvable sous $Src\codeql — vérifie ton extraction."
+                    exit 1
+                  }
+
+                  # Créer l'arborescence cible
+                  New-Item -ItemType Directory -Force -Path $Dst | Out-Null
+
+                  # Copier les fichiers du bundle
+                  Copy-Item -Path "$Src\*" -Destination "$X64" -Recurse -Force
+
+                  # Créer le marqueur
+                  New-Item -ItemType File -Force -Path $Marker | Out-Null
+
+                  if (Test-Path (Join-Path $Dst "codeql.exe")) {
+                    Write-Host "✅ CodeQL installé avec succès dans $Dst"
+                  } else {
+                    Write-Error "❌ Échec : codeql.exe introuvable après copie"
+                    exit 1
+                  }
+
+            - task: AdvancedSecurity-Codeql-Init@1
+              displayName: 'Initialiser CodeQL'
+              inputs:
+                languages: '${{ parameters.codeQLLanguages }}'
+                querysuite: 'code-scanning'
+
+          # ========================================
+          # ÉTAPE 3: Compilation des solutions
+          # ========================================
+          - task: VSBuild@1
+            displayName: 'Compiler les solutions'
+            inputs:
+              solution: '${{ parameters.solutionPath }}'
+              platform: '${{ parameters.buildPlatform }}'
+              configuration: '${{ parameters.buildConfiguration }}'
+              msbuildArgs: '/p:SkipInvalidConfigurations=true'
+
+          # ========================================
+          # ÉTAPE 4: Scans de sécurité (PostBuild)
+          # ========================================
+          
+          # Scan GHAS (CodeQL + Dependency Scanning)
+          - ${{ if eq(parameters.enableGHAS, true) }}:
+            - template: ST3.Securite.ScanGHAS.yml
+              parameters:
+                directoryExclusionList: '${{ parameters.directoryExclusionList }}'
+
+          # Scan DevSkim
+          - ${{ if eq(parameters.enableDevSkim, true) }}:
+            - template: ST3.Securite.ScanDevSkim.yml

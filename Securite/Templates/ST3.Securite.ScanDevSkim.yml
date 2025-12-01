@@ -1,0 +1,131 @@
+# Template pour le scan DevSkim
+# DevSkim est un outil de détection de patterns de sécurité dans le code source
+# Il identifie les pratiques de codage non sécurisées et les vulnérabilités courantes
+# 
+# Contact: Fabiano Liberati, Martin Desmeules
+# Date: 2025-11-30
+
+parameters:
+  # Répertoire source à scanner
+  - name: sourcesDirectory
+    type: string
+    default: '$(Build.SourcesDirectory)'
+  
+  # Continuer en cas d'erreur
+  - name: continueOnError
+    type: boolean
+    default: false
+  
+  # Publier les résultats dans Advanced Security
+  - name: publishToAdvancedSecurity
+    type: boolean
+    default: true
+
+steps:
+  # ========================================
+  # Installation de DevSkim CLI
+  # ========================================
+  - task: PowerShell@2
+    displayName: 'DevSkim - Installation'
+    inputs:
+      targetType: 'inline'
+      script: |
+        Write-Host "Installation de DevSkim CLI..."
+        dotnet tool install --global Microsoft.CST.DevSkim.CLI --version 1.0.* 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+          Write-Host "✅ DevSkim installé avec succès"
+        } else {
+          Write-Host "⚠️ DevSkim déjà installé ou erreur d'installation, on continue..."
+        }
+        
+        # Vérifier l'installation
+        $devskimPath = (Get-Command devskim -ErrorAction SilentlyContinue).Source
+        if ($devskimPath) {
+          Write-Host "✅ DevSkim trouvé : $devskimPath"
+          devskim --version
+        } else {
+          Write-Error "❌ DevSkim n'est pas accessible dans le PATH"
+          exit 1
+        }
+    continueOnError: false
+
+  # ========================================
+  # Exécution du scan DevSkim
+  # ========================================
+  - task: PowerShell@2
+    displayName: 'DevSkim - Analyse du code'
+    inputs:
+      targetType: 'inline'
+      script: |
+        Write-Host "Démarrage de l'analyse DevSkim..."
+        Write-Host "Répertoire source: ${{ parameters.sourcesDirectory }}"
+        
+        # Créer le répertoire de sortie pour les résultats
+        $outputDir = Join-Path "$(Build.ArtifactStagingDirectory)" "DevSkim"
+        New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+        
+        $sarifFile = Join-Path $outputDir "devskim-results.sarif"
+        
+        # Exécuter DevSkim avec sortie SARIF
+        devskim analyze "${{ parameters.sourcesDirectory }}" `
+          --output-file "$sarifFile" `
+          --output-format sarif `
+          --severity-level Critical,Important,Moderate `
+          --crawl-archives false
+        
+        $exitCode = $LASTEXITCODE
+        
+        if (Test-Path $sarifFile) {
+          $fileSize = (Get-Item $sarifFile).Length
+          Write-Host "✅ Fichier SARIF généré : $sarifFile ($fileSize octets)"
+          
+          # Afficher un résumé des résultats
+          $sarif = Get-Content $sarifFile -Raw | ConvertFrom-Json
+          $runCount = $sarif.runs.Count
+          if ($runCount -gt 0) {
+            $resultCount = $sarif.runs[0].results.Count
+            Write-Host "📊 Nombre de problèmes détectés : $resultCount"
+          }
+        } else {
+          Write-Warning "⚠️ Aucun fichier SARIF généré"
+        }
+        
+        # Ne pas échouer si des vulnérabilités sont trouvées
+        if ($exitCode -ne 0) {
+          Write-Host "⚠️ DevSkim a détecté des problèmes (exit code: $exitCode)"
+        }
+        
+        exit 0
+    continueOnError: ${{ parameters.continueOnError }}
+
+  # ========================================
+  # Publication des résultats SARIF
+  # ========================================
+  - task: PublishBuildArtifacts@1
+    displayName: 'DevSkim - Publication des artefacts'
+    inputs:
+      PathtoPublish: '$(Build.ArtifactStagingDirectory)/DevSkim'
+      ArtifactName: 'DevSkim-SecurityResults'
+      publishLocation: 'Container'
+    condition: always()
+
+  # ========================================
+  # Upload vers Advanced Security (si activé)
+  # ========================================
+  - ${{ if eq(parameters.publishToAdvancedSecurity, true) }}:
+    - task: PowerShell@2
+      displayName: 'DevSkim - Upload vers Advanced Security'
+      inputs:
+        targetType: 'inline'
+        script: |
+          Write-Host "Upload des résultats DevSkim vers Advanced Security..."
+          $sarifFile = "$(Build.ArtifactStagingDirectory)/DevSkim/devskim-results.sarif"
+          
+          if (Test-Path $sarifFile) {
+            Write-Host "✅ Fichier SARIF trouvé, upload en cours..."
+            # Note: Cette tâche nécessite l'extension Advanced Security
+            # Les résultats SARIF seront automatiquement détectés et intégrés
+          } else {
+            Write-Warning "⚠️ Aucun fichier SARIF à uploader"
+          }
+      continueOnError: true

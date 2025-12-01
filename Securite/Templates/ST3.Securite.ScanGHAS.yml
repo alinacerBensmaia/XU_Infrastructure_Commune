@@ -1,0 +1,44 @@
+# Template pour les scans GitHub Advanced Security (GHAS)
+# Inclut CodeQL (analyse de code statique) et Dependency Scanning (analyse des dépendances)
+# 
+# Contact: Martin Desmeules, Fabiano Liberati
+# Date: 2025-11-30
+
+parameters:
+  # Liste des répertoires à exclure du scan de dépendances
+  - name: directoryExclusionList
+    type: string
+    default: ''
+  
+  # Attendre le traitement complet (peut rallonger le pipeline)
+  - name: waitForProcessing
+    type: boolean
+    default: false
+
+steps:
+  # ========================================
+  # CodeQL - Analyse du code source
+  # ========================================
+  - task: AdvancedSecurity-Codeql-Analyze@1
+    displayName: 'GHAS - Analyse CodeQL'
+    inputs:
+      WaitForProcessing: ${{ parameters.waitForProcessing }}
+    continueOnError: false
+
+  # ========================================
+  # Dependency Scanning - Analyse des vulnérabilités des dépendances
+  # ========================================
+  - task: AdvancedSecurity-Dependency-Scanning@1
+    displayName: 'GHAS - Dependency Scanning (SCA)'
+    inputs: 
+      directoryExclusionList: '${{ parameters.directoryExclusionList }}'
+    continueOnError: false
+
+  # ========================================
+  # Publication des résultats GHAS
+  # ========================================
+  - task: AdvancedSecurity-Publish@1
+    displayName: 'GHAS - Publication des résultats'
+    inputs:
+      WaitForProcessing: ${{ parameters.waitForProcessing }}
+    continueOnError: false
